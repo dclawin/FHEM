@@ -314,6 +314,8 @@ analyze_hms(bucket_t *b)
 
 #ifdef HAS_ESA
 
+// GIRA_MODE need to be defined in "boards.h"
+
 #ifdef GIRA_MODE
 #define ESA_BITLEN 160
 #define ESA_DATALEN 17
