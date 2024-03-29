@@ -4,8 +4,17 @@
 # please feel free to contact me for any     #
 # changes, improvments, suggestions, etc     #
 #                                            #
+# Modified for Support of                    #
+# GIRA Weather Station / EHZ Meter Sensor    #
+# D Clawin (dclawin(at)dctronic.de)          #
+# 03/2024                                    #
+#                                            #
+# Please note:                               #
+# Patch for rf_receive.c in CUL firmware     #
+# required for GIRA support (so doc below)   #
+#                                            #
 ##############################################
-# $Id: 64_ESA2000.pm 7243 2014-12-17 13:04:32Z stromer-12 $
+# $Id: 64_ESA2000.pm,v 1.2 2024/03/10 09:01:16 dclawin Exp dclawin $
 
 package main;
 
@@ -15,6 +24,7 @@ use warnings;
 my %codes = (
   "01.e" => "ESAx000WZ",
   "03.e" => "ESA1000Z",
+  "cc.e" => "GIRAEHZ",
 );
 
 
@@ -24,14 +34,16 @@ ESA2000_Initialize($)
 {
   my ($hash) = @_;
 
+#                        GIRA uses same data format, 2 bytes added for POWER calculated in sensor
 #                        S0119FA011E00007D6E003100000007C9 ESA2000_LED
+#                        S2B225FCC1E040000002F6500000000000060 GIRA EHZ
 
-  $hash->{Match}     = "^S................................\$";
+  $hash->{Match}     = "^S................................(....)?\$"; # optional 4 extra bytes for GIRA
   $hash->{DefFn}     = "ESA2000_Define";
   $hash->{UndefFn}   = "ESA2000_Undef";
   $hash->{ParseFn}   = "ESA2000_Parse";
   $hash->{AttrList}  = "IODev do_not_notify:0,1 showtime:0,1 ignore:0,1 ".
-                       "model:esa2000-led,esa2000-wz,esa2000-s0,esa1000wz-ir,esa1000wz-s0,esa1000wz-led,esa1000gas base_1 base_2 ".
+                       "model:esa2000-led,esa2000-wz,esa2000-s0,esa1000wz-ir,esa1000wz-s0,esa1000wz-led,esa1000gas,gira-ehz base_1 base_2 ".
                        $readingFnAttributes;
 }
 
@@ -94,7 +106,7 @@ ESA2000_Parse($$)
 # S 1C 0785 011E 00011CDA 0002 0D056C 004C     ESA1000WZ_LED    Zählerkonstante = 75
 # S 6E 003D 011E 00037650 0011 02C1DA 07D0     ESA1000WZ_S0     Zählerkonstante = 2000
 # S A3 0543 031E 0000099C 0064 001147 000F     ESA1000GAS       Zählerkonstante = 10
-
+# S 2B 225F CC1E 04 00A0 002F65 0001 00000000 42 GIRAEHZ        Zählerkonstante = 96
   $msg = lc($msg);
   my $seq = substr($msg, 1, 2);
   my $dev = substr($msg, 3, 4);
@@ -138,7 +150,7 @@ ESA2000_Parse($$)
 # 24-28     day_last, month_last, year_last, hour, hour_last
 # 29        battery
 
-  if(($type eq "ESAx000WZ") || ($type eq "ESA1000Z")) {
+  if(($type eq "ESAx000WZ") || ($type eq "ESA1000Z") || ($type eq "GIRAEHZ")) {
 
     @txt = ( "repeat", "sequence", "total_ticks", "actual_ticks", "ticks", 
              "raw", "total", "actual", "diff", "diff_sec", "diff_ticks", 
@@ -146,6 +158,8 @@ ESA2000_Parse($$)
              "day_hr", "day_lr", "month_hr", "month_lr", "year_hr", "year_lr", 
              "day_last", "month_last", "year_last", "hour", "hour_last", 
              "battery" );
+#   if ( $type eq "GIRAEHZ") 
+#             { push(@txt,"power") ; }   # add "power" to list of parameters
 
   } else {
 
@@ -156,12 +170,23 @@ ESA2000_Parse($$)
 
     # Codierung Hex
     $v[29]=  int(hex(substr($cde,2,2)) / 128) ? "low" : "ok";
+    
+    if ($type ne "GIRAEHZ") { 
     $v[0] =  int(hex($seq) / 128) ? "+" : "-";
     $v[1] =  hex($seq) % 128;
     $v[2] =  hex(substr($val,0,8));
     $v[3] =  hex(substr($val,8,4));
     $v[4] =  hex(substr($val,18,4)) ^ hex(substr($msg,3,2));    # XOR high byte of device-id
+    
+    } else {   # GIRA data format
+    $v[0] =  int(hex($seq) / 64) ? "+" : "-";
+    $v[1] =  hex($seq) % 64;
+    $v[2] =  hex(substr($val,6,6));   # total ticks since reset
+    $v[3] =  hex(substr($val,12,4));  # current ticks
+    $v[4] =  hex(substr($msg,33,4)) ^ hex(substr($msg,3,2));    # Imp./kWh 
+    $v[30] =  hex(substr($val,2,4));  # Power provided by sensor
 
+    } 
     my $corr = 1;
     if ($type eq "ESA1000Z") {
       $corr = 1000/$v[4];
@@ -265,6 +290,10 @@ ESA2000_Parse($$)
         readingsBulkUpdate($def, $txt[$i], $v[$i]);
       }
     }
+  #   add power event for GIRA-EHZ, if power > 0 (suppresses bad readings at low power)
+    if ( $type eq "GIRAEHZ" && $v[30] > 0 )  {
+              readingsBulkUpdate($def, "power", $v[30]);
+    }
 
     readingsBulkUpdate($def, "type", $type);
     readingsBulkUpdate($def, "state", $val);
@@ -288,7 +317,7 @@ ESA2000_Parse($$)
 <a name="ESA2000"></a>
 <h3>ESA2000</h3>
 <ul>
-  The ESA2000 module interprets ESA1000 or ESA2000 type of messages received by the CUL.
+  The ESA2000 module interprets ESA1000 or ESA2000 and GIRA type of messages received by the CUL.
   <br><br>
 
   <a name="ESA2000define"></a>
@@ -315,12 +344,43 @@ ESA2000_Parse($$)
     <li><a href="#ignore">ignore</a></li><br>
     <li><a href="#do_not_notify">do_not_notify</a></li><br>
     <li><a href="#showtime">showtime</a></li><br>
-    <li><a href="#model">model</a> (esa2000-led, esa2000-wz, esa2000-s0, esa1000wz-ir, esa1000wz-s0, esa1000wz-led, esa1000gas)</li><br>
+    <li><a href="#model">model</a> (esa2000-led, esa2000-wz, esa2000-s0, esa1000wz-ir, esa1000wz-s0, esa1000wz-led, esa1000gas, gira-ehz)</li><br>
     <li><a href="#IODev">IODev</a></li><br>
     <li><a href="#readingFnAttributes">readingFnAttributes</a></li><br>
   </ul>
   <br>
-</ul>
+  <b>For GIRA mode, a patch is required for <i>rf_receive.c</i> in CUL firmware</b>
+  <pre>   
+
+315a316,326
+&gt 
+&gt #ifdef GIRA_MODE
+&gt #define ESA_BITLEN 160
+&gt #define ESA_DATALEN 17
+&gt #define ESA_CRC 0xee11
+&gt #else
+&gt #define ESA_BITLEN 144
+&gt #define ESA_DATALEN 15
+&gt #define ESA_CRC 0xf00f
+&gt #endif
+&gt 
+328c339
+&lt   if( (b->byteidx*8 + (7-b->bitidx)) != 144 )
+---
+&gt   if( (b->byteidx*8 + (7-b->bitidx)) != ESA_BITLEN )
+332c343
+&lt   uint16_t crc = 0xf00f;
+---
+&gt   uint16_t crc = ESA_CRC ;
+334c345
+&lt   for (oby = 0; oby < 15; oby++) {
+---
+&gt   for (oby = 0; oby < ESA_DATALEN ; oby++) {
+  </pre>   
+
+  <br>
+  Please define GIRA_MODE CUL firmware flag in <i>board.h</i>
+&lt/ul>
 
 
 =end html

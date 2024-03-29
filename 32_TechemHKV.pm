@@ -1,5 +1,5 @@
 ###############################################################################
-# $Id: 32_TechemHKV.pm 15731 2017-12-30 21:10:18Z herrmannj $
+# $Id: 32_TechemHKV.pm,v 1.4 2023/09/17 15:08:24 root Exp root $
 #
 # this module is part of fhem under the same license
 # copyright 2015, joerg herrmann
@@ -137,6 +137,11 @@ TechemHKV_Receive(@) {
     $hash->{".updateTimestamp"} = $ts;
     $i = $#{ $hash->{CHANGED} };
     readingsBulkUpdate($hash, "current_period", $msg->{actualVal});
+    # new: always save history along with current period
+    readingsBulkUpdate($hash, "history", $msg->{history});
+    readingsBulkUpdate($hash, "rssi", $msg->{rssi}  );
+    readingsBulkUpdate($hash, "debug", $msg->{debug} ) ;
+
     $hash->{CHANGETIME}->[$#{ $hash->{CHANGED} }] = $ts if ($#{ $hash->{CHANGED} } != $i ); # only add ts if there is a event to
     readingsEndUpdate($hash, 1);
   };
@@ -194,6 +199,9 @@ TechemHKV_Parse(@) {
   $message->{version} = substr $msg, 14, 2;
   $message->{type} = substr $msg, 16, 2;
   
+  $message->{rssi} = $rssi ;
+  $message->{debug} = substr $msg, 18, 4;
+  
   # last_date
   #if ($message->{version} eq '94') {
   #  ($message->{last}->{year}, $message->{last}->{month}, $message->{last}->{day}) 
@@ -223,7 +231,17 @@ TechemHKV_Parse(@) {
   #} else {
     $message->{actualVal} = hex(join '', reverse split /(..)/, substr $msg, 34, 4);
   #}
-  
+ 
+  # history      call with array of hex bytes
+  if ($message->{version} eq '94') {     # format correct for 94 ?    
+    $message->{history} = TechemHKV_ParseHistory( (substr $msg, 48, 2+2+2+48) =~ /(..)/g ) ;
+  }  elsif ($message->{version} eq '69') {
+    #$message->{history} = TechemHKV_ParseHistory( (substr $msg, 46, 2+2+4+2+48) =~ /(..)/g ) ;
+    $message->{history} = TechemHKV_ParseHistory( (substr $msg, 46, 2+2+2+48) =~ /(..)/g ) ;
+  }
+
+
+ 
   # temp sensor 1
   if ($message->{version} eq '94') {
     $message->{temp1} = sprintf "%.2f", (hex(join '', reverse split /(..)/, substr $msg, 40, 4) / 100);
@@ -328,6 +346,19 @@ TechemHKV_ParseLastDate(@) {
   my $m = ($b >> 5) & 0x0F;
   my $y = ($b >> 9) & 0x3F;
   return ($y, $m, $d);
+}
+
+sub
+TechemHKV_ParseHistory(@) {
+#  crc removed by SanityCheck
+  my $factor  = hex ($_[2]) + 1 ;  # factor: 0->1 1->2 2->3 
+  #my @ihist = ( $factor, hex ($_[0]) * $factor ) ;
+  my @ihist = (  hex ($_[0]) * $factor ) ;
+  my $i ;
+  foreach $i ( 3..26) {
+    push @ihist, hex($_[$i]) * $factor ;
+   }
+  return (join ' ',@ihist );
 }
 
 sub 

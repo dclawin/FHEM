@@ -1,5 +1,5 @@
 ###############################################################################
-# $Id: 32_TechemWZ.pm 18910 2019-03-15 15:17:28Z herrmannj $
+# $Id: 32_TechemWZ.pm,v 1.4 2023/09/23 10:50:39 root Exp root $
 #
 # this module is part of fhem under the same license
 # copyright 2015, joerg herrmann
@@ -154,6 +154,8 @@ TechemWZ_Receive(@) {
     $hash->{CHANGETIME}->[$#{ $hash->{CHANGED} }] = $ts if ($#{ $hash->{CHANGED} } != $i ); # only add ts if there is a event to
     $i = $#{ $hash->{CHANGED} };
     readingsBulkUpdate($hash, "current_period", $msg->{actualVal});
+    # new: always save history along with current period
+    readingsBulkUpdate($hash, "history", $msg->{history});
     $hash->{CHANGETIME}->[$#{ $hash->{CHANGED} }] = $ts if ($#{ $hash->{CHANGED} } != $i ); # only add ts if there is a event to
     readingsEndUpdate($hash, 1);
   }
@@ -215,7 +217,11 @@ TechemWZ_Parse(@) {
   $message->{type} = TechemWZ_ParseSubType(@m);
   $message->{version} = TechemWZ_ParseSubVersion(@m);
   $message->{rssi} = ($rssi)?$rssi:"?";
-  
+  #
+  #$message->{history} = TechemWZ_ParseHistory( @m[23..47] ); #(substr $msg, 46, 2+2+44) =~ /(..)/g ) ;
+  $message->{history} = TechemWZ_ParseHistory( @m[21,23..47] ); #(substr $msg, 46, 2+2+44) =~ /(..)/g ) ;
+  # 22 most likely factor
+ 
   # metertype specific adjustment
   if ($message->{type} =~ /62|72/) {
     $message->{lastVal} = TechemWZ_ParseLastPeriod(@m);
@@ -390,6 +396,21 @@ TechemWZ_WMZ_Type1_ParseActualDate(@) {
   my $y = $t[5] + 1900;
   return ($y, $m, $d);
 }
+
+sub
+TechemWZ_ParseHistory(@) {
+#  crc removed by SanityCheck
+#  my $factor  = hex ($_[2]) + 1 ;  # factor: 0->1 1->2 2->3
+#  my @ihist = ( $factor, hex ($_[0]) * $factor ) ;
+  my $i ;
+  my @ihist ;
+  foreach $i ( 0..23) {
+    #push @ihist, hex($_[$i]) * $factor ;
+    push @ihist, hex($_[$i]) ;
+   }
+  return (join ' ',@ihist );
+}
+
 
 sub 
 TechemWZ_createCrcTable(@) {
