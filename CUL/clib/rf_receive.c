@@ -313,6 +313,17 @@ analyze_hms(bucket_t *b)
 }
 
 #ifdef HAS_ESA
+
+#ifdef GIRA_MODE
+#define ESA_BITLEN 160
+#define ESA_DATALEN 17
+#define ESA_CRC 0xee11
+#else
+#define ESA_BITLEN 144
+#define ESA_DATALEN 15
+#define ESA_CRC 0xf00f
+#endif
+
 uint8_t
 analyze_esa(bucket_t *b)
 {
@@ -325,13 +336,13 @@ analyze_esa(bucket_t *b)
   if (b->state != STATE_ESA)
        return 0;
 
-  if( (b->byteidx*8 + (7-b->bitidx)) != 144 )
+  if( (b->byteidx*8 + (7-b->bitidx)) != ESA_BITLEN )
        return 0;
 
   uint8_t salt = 0x89;
-  uint16_t crc = 0xf00f;
+  uint16_t crc = ESA_CRC ;
   
-  for (oby = 0; oby < 15; oby++) {
+  for (oby = 0; oby < ESA_DATALEN ; oby++) {
   
        uint8_t byte = getbits(&in, 8, 1);
      
